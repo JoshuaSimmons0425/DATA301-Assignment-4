@@ -1,0 +1,253 @@
+---
+title: "Assignment 4 Report"
+author: "Joshua Simmons"
+date: "Due 28-09-2026"
+output: pdf_document
+---
+
+# Excercise One
+After reading through the "Sample quantiles in statistical packages" (1996) by Hyndman, R. J., & Fan, Y, I would chose the 8th definition $\hat{Q}_8(p)$ - the median-unbiased estimator as the choice of order statistic for computing quantiles. This is because it satisfies 5 out of 6 desirable properties, while also providing approximate median-unbiased estimates regardless of the underlying distribution of the data. While Definition 5 $\hat{Q}_5(p)$ satisfies all six of the desired properties, it is derived from interpolating between midpoints of the inverse distribution function, compromising the unbiases. Therefore, I would opt for Definition 8 as the final choice.
+
+The current version of R I am using is 4.5.2, and the default type of order statitsics is Definition 7 $\hat{Q}_7(p)$. 
+
+If the estimator by analogy is suspected to be biased, we would derive and implement a boostrap bias-corrected estimator to estimate the bias and apply the correction. Would do so in these following steps:
+
+Let $X$ represent the original sample dataset of size $N$. The baseline sample estimator, denoted as $\hat{\lambda}_{\text{IQR}}$, is defined by the following functional form:
+
+$$\hat{\lambda}_{\text{IQR}} = \frac{\ln 3}{q_{3/4}(X) - q_{1/4}(X)}$$
+
+We assume that $\hat{\lambda}_{\text{IQR}}$ is a biased estimator for the true population parameter $\lambda$, such that its expected value contains a finite-sample bias term:
+
+$$\mathbb{E}[\hat{\lambda}_{\text{IQR}}] = \lambda + \text{Bias}(\hat{\lambda}_{\text{IQR}})$$
+
+To estimate this unknown bias term using the bootstrap method, we draw $B = 200$ independent bootstrap resamples ($X^{*1}, X^{*2}, \dots, X^{*200}$), each of size $N$, sampled uniformly with replacement from the original dataset $X$. 
+
+For each individual bootstrap sample $X^{*b}$ (where $b \in \{1, 2, \dots, 200\}$), we calculate its corresponding replication estimator using the exact same plug-in function:
+
+$$\hat{\lambda}_{\text{IQR}}^{*b} = \frac{\ln 3}{q_{3/4}(X^{*b}) - q_{1/4}(X^{*b})}$$
+
+The expectation of the bootstrap distribution, $\mathbb{E}_*[\hat{\lambda}_{\text{IQR}}^{*}]$, is approximated empirically by taking the arithmetic mean of these $B = 200$ bootstrap replications:
+
+$$\bar{\lambda}_{\text{IQR}}^* = \frac{1}{200} \sum_{b=1}^{200} \hat{\lambda}_{\text{IQR}}^{*b}$$
+
+The bootstrap estimate of the first-order bias is defined as the difference between the expected value of the bootstrap replicates and our original sample statistic:
+
+$$\widehat{\text{Bias}}_{\text{boot}}(\hat{\lambda}_{\text{IQR}}) = \bar{\lambda}_{\text{IQR}}^* - \hat{\lambda}_{\text{IQR}}$$
+
+The first-order bootstrap bias-corrected estimator, denoted as $\tilde{\lambda}$, is constructed by subtracting this estimated bias from our initial sample estimate:
+
+$$\tilde{\lambda} = \hat{\lambda}_{\text{IQR}} - \widehat{\text{Bias}}_{\text{boot}}(\hat{\lambda}_{\text{IQR}})$$
+
+Substituting the estimated bias expression into the formula yields:
+
+$$\tilde{\lambda} = \hat{\lambda}_{\text{IQR}} - \left(\bar{\lambda}_{\text{IQR}}^* - \hat{\lambda}_{\text{IQR}}\right)$$
+
+$$\tilde{\lambda} = 2\hat{\lambda}_{\text{IQR}} - \bar{\lambda}_{\text{IQR}}^*$$
+
+Here is the R implementation of $\tilde{\lambda}$ for 200 bootstrap replications:
+
+```{r, results='hide', message='FALSE', warning='FALSE'}
+
+lambda_tilde <- function(lambda_iqr, data, B = 200) {
+  # Calculate bootstrap replicates
+  bootstrap_replicates <- replicate(B, {
+    bootstrap_sample <- sample(data, size = length(data), replace = TRUE)
+    q3 <- quantile(bootstrap_sample, probs = 0.75)
+    q1 <- quantile(bootstrap_sample, probs = 0.25)
+    iqr = q3 - q1
+
+    if (iqr > 0) {
+      return(log(3) / iqr)
+    } else {
+      return(NA)
+    }
+
+  })
+  
+  # Calculate bootstrap mean
+  valid_replicates <- bootstrap_replicates[!is.na(bootstrap_replicates)]
+
+  if (length(valid_replicates) == 0) {return(NA)}
+  
+  bootstrap_mean <- mean(valid_replicates)
+  
+  # Calculate bias-corrected estimator
+  lambda_hat <- 2 * lambda_iqr - bootstrap_mean
+  
+  return(lambda_hat)
+}
+```
+
+When conducting the Monte Carlo simulation for all three estimators, here are the parameters I have chosen:
+
+- 5000 simulation runs 
+- 200 boostrap replications
+
+```{r, echo = FALSE}
+library(pander)
+
+set.seed(42)
+
+M = 5000
+B = 200
+
+lambdas <- c(0.1, 1.0, 10.0)
+sample_sizes <- c(5, 30, 100)
+ln3 <- log(3)
+
+results <- data.frame(
+  True_Lambda = numeric(),
+  n = numeric(),
+  MSE_ML = numeric(),
+  MSE_IQR = numeric(),
+  MSE_Tilde = numeric()
+)
+
+# --- Run Monte Carlo Experiment ---
+for (l_true in lambdas) {
+  # Given lambda is a rate parameter, scale = 1 / lambda
+  scale_true <- 1.0 / l_true
+  
+  for (n in sample_sizes) {
+    # Vectors to store estimates for the M simulations
+    estimates_ml    <- numeric(M)
+    estimates_iqr   <- numeric(M)
+    estimates_tilde <- numeric(M)
+    
+    for (m in 1:M) {
+      # 1. Generate data from an Exponential distribution
+      X <- rexp(n, rate = l_true)
+      
+      # 2. Maximum Likelihood Estimator: lambda_ML
+      mean_x <- mean(X)
+      estimates_ml[m] <- if (mean_x > 0) 1.0 / mean_x else NA
+      
+      # 3. Baseline Quantile Estimator: lambda_IQR
+      quants_orig <- quantile(X, probs = c(0.25, 0.75), type = 7)
+      iqr_orig <- quants_orig[2] - quants_orig[1]
+      estimates_iqr[m] <- if (iqr_orig > 0) ln3 / iqr_orig else NA
+      
+      # 4. First-order Bootstrap Bias Corrected Estimator: lambda_tilde
+      boot_lambdas <- numeric(B)
+      
+      # # Construct final tilde estimate
+      estimates_tilde[m] <- lambda_tilde(estimates_iqr[m], X, B)
+    }
+    
+    # Filter out any structural undefined cases (e.g., sample IQR = 0 when n=5)
+    valid_m <- is.finite(estimates_ml) & is.finite(estimates_iqr) & is.finite(estimates_tilde)
+    
+    # Calculate Mean Squared Error (MSE)
+    mse_ml    <- mean((estimates_ml[valid_m] - l_true)^2)
+    mse_iqr   <- mean((estimates_iqr[valid_m] - l_true)^2)
+    mse_tilde <- mean((estimates_tilde[valid_m] - l_true)^2)
+    
+    # Append row to results data frame
+    results <- rbind(results, data.frame(
+      True_Lambda = l_true,
+      n = n,
+      MSE_ML = mse_ml,
+      MSE_IQR = mse_iqr,
+      MSE_Tilde = mse_tilde
+    ))
+  }
+}
+
+pander(results)
+
+```
+
+The Monte Carlo simulation shows the computational dominance of the Maximum Likelihood estimator ($\hat{\lambda}_{\text{ML}}$) across the entire evaluated parameter space ($\Lambda \times N$). By effectively leveraging the full sample data, $\hat{\lambda}_{\text{ML}}$ achieves optimal statistical efficiency and maintains the lowest Mean Squared Error (MSE) in every experimental cell. Furthermore, the numerical results validate the scale invariance property of the underlying exponential distribution. As the true rate parameter $\lambda$ scales by a factor of 10, the corresponding MSE values inflate quadratically by a factor of 100, verifying the structural and mathematical integrity of the data-generating process.
+
+On the other hand, the performance of the first-order bootstrap bias-corrected estimator ($\tilde{\lambda}$) illustrates a severe small-sample breakdown and an unfavorable bias-variance trade-off. At a sample size of $n = 5$, the estimator suffers catastrophic failures, with the MSE exploding to extreme values. This phenomenon occurs because the sample interquartile range resides in the denominator of the functional form; when tiny sample sizes cause the bootstrap IQR to compress near zero, the resulting replicates surge toward infinity and corrupt the bootstrap mean. Even in larger sample sizes ($n = 30$ and $n = 100$) where the distribution stabilizes, $\tilde{\lambda}$ consistently underperforms the uncorrected quantile baseline ($\hat{\lambda}_{\text{IQR}}$), proving that the variance penalty introduced by bootstrapping an unstable denominator completely outweighs the targeted first-order bias reduction.
+
+
+# Exercise 2
+
+### Part 1
+
+```{r, echo=FALSE, message=FALSE}
+library(fpp2)
+library(pander)
+library(ggplot2)
+
+ausbeer <- fpp2::ausbeer
+
+frequency <- paste("Frequency of the series:", frequency(ausbeer))
+
+autoplot(ausbeer) +
+  ggtitle("Quarterly Australian Beer Production") +
+  xlab("Year") +
+  ylab("Megalitres")
+
+pander(frequency)
+
+```
+
+The frequency of the time series is 4 (per year), meaning that the sampling takes place for each quater per year. This can be determined by the built-in frequency function in R.
+
+### Part 2
+When looking at the produced time series plot on Part 1, the overall behaviour of the time series shows a strong upward trend followed by a platea and then a steady decline. Between 1956 and 1975, the overall beer production steadily increased on average from 250 maglitres to around 500 megalitres. Between the late 1970s and early 1990s, the increase in production plateus and remains around the 500 megalitre average. Finally, between the 1990s and 2010, there appears to be a gradual decrease in beer production, dropping down to around 450 on average. 
+
+Despite this non-linear trend, there is clear evidence of a long-term trend in the time series, with multiple components that tells a different story of the trend.
+
+### Part 3
+In the time series plot, the data shows regular and strong seasonal fluctuations. For each year, there are sharp peaks and deep troughs occuring within each cycle, and the pattern reflects a seasonal demand like higher production is specific quarters (like summer), while lower in others.
+
+### Part 4
+In the time series plot, there appears to be a non-constant variance, as the • size of the seasonal swings is smaller at the beginning of the series (1950s) when overall production is lower. As the overall production increases into the 1970s and 1980s, the peaks and troughs become much wider apart. This suggests an multiplicative time series structure, where the seasonal variation increases and decreases relative to the level of the trend. Therefore, a transformation would be appropriate for the data.
+
+### Part 5
+In the time series plot, there are a couple of standout observations that attracts my attention. One of which is the 1991 peak beer production with the highest spike out of all other observations. While the time series regularly peaks every year, this specific peak reaches the absolute maximum value on the entire chart (around 600 megalitres). It stands out because it sharply breaks the gradual downward trend that had already begun in the late 1980s. Another is the late 1980s peak, just before the 1991 spike. There is another exceptionally high peak around 1989 that also reaches near the 600 megalitre line, forming an unusual "double peak" anomaly during a period where production was otherwise starting to decline.
+
+
+### Part 6
+```{r, echo = FALSE}
+ggseasonplot(ausbeer, year.labels = TRUE, 
+             main = "Seasonal Plot: Quarterly Australian Beer Production",
+             ylab = "Megalitres", xlab = "Quarter")
+```
+
+In the seasonality plot, there are some features that are now more obvious than from the ordinary time series. The plot explicity maps out the precise annual cycle, revealing that Quarter 4 consistently serves as the absolute peak for beer production while Quarter 2 acts as the deepest trough. The graph vertically stratifies the data into distinct chronological bands that isolate historical eras (with the low-volume 1950s at the bottom and peak 1980s/90s at the top), while highlighting subtle structural shifts over time, such as Quarter 1 production eventually growing to surpass Quarter 3 in later decades. 
+
+
+### Part 7
+```{r, echo = FALSE}
+ggsubseriesplot(ausbeer) +
+  ggtitle("Seasonal Subseries Plot: Australian Beer Production") +
+  ylab("Megalitres") +
+  xlab("Quarter")
+
+```
+
+In the subseries plot, it is apparent that Quarter 4 holds the highest typical value, while Quarter 2 holds the lowest typical production baseline. However, this seasonal pattern is unstable over time, as the gap between the annual peaks and troughs widened dramatically during the high-production eras compared to the 1950s. This instability is further highlighted by changing internal dynamics; Quarter 1 grew much faster and peaked higher than Quarter 3, proving that the underlying shape of the annual cycle fundamentally evolved over the decades.
+
+### Part 8
+
+For this data, I believe it is essential to apply both a transformation and detrending. This is because the seasonal variation is multiplicative (the peaks and troughs widen as production increases); transforming stabilises this changing variance. Furthermore, detrending is required because the series exhibits a strong, non-linear long-term trend, which must be removed to make the data stationary for modelling. 
+
+For the data preprocessing, I have opted for Log-Transformation and detrending. Here is the visual results below. 
+
+```{r echo = FALSE}
+library(fpp2)
+
+# Log transform to stabilize the multiplicative variance
+log_beer <- log(ausbeer)
+
+# Detrend the data using a regular first difference (lag = 1)
+detrended_log_beer <- diff(log_beer, lag = 1)
+
+# Generate visual plots using autoplot()
+p1 <- autoplot(ausbeer) + 
+  labs(title = "Original Beer Production", y = "Megalitres", x = "Year") +
+  theme_minimal()
+
+p2 <- autoplot(detrended_log_beer, color = "darkred") + 
+  labs(title = "Log-Transformed & Detrended Series", y = "Differenced Log", x = "Year") +
+  theme_minimal()
+
+# Display them stacked vertically to easily see the stationarity
+gridExtra::grid.arrange(p1, p2, ncol = 1)
+```
+
+In the visual above, the bottom time series successfully prepares the data for modeling by achieving stationarity in both variance and mean. While the Original Beer Production plot features a changing macro-trend and widening seasonal swings that scale upward with volume, the Log-Transformed & Detrended Series scales everything uniformly. The log transformation stabilizes the seasonal variability, making the heights of the annual peaks and troughs uniform from left to right, while the first-order differencing strips out the long-term trend, flattening the series around a constant mean of 0.
